@@ -97,6 +97,8 @@
 
 require('dotenv').config()//secret configuration file to store secret information such as secret keys
 const jwt = require('jsonwebtoken')//jSON WEB TOKENS (digital ids) used to identify users who have logged in
+
+const marked = require("marked")
 const bcrypt = require('bcrypt')//hashes passwords to a one way process of turning passwords to a jumbled string of characters.
 const cookieParser = require('cookie-parser')
 const express = require('express');//imports the express library;
@@ -137,6 +139,14 @@ app.use (cookieParser())
 
 
 app.use(function(req,res,next){
+res.locals.filterUserHTML = function(content){
+    return sanitizeHTML(marked.parse(content),{
+        allowedTags:["p","br","ul","li","ol","strong","bold","i","em","h1","h2","h3","h4","h5","h6"],
+        allowedAttributes:{}
+    })
+}
+
+
     res.locals.errors = []
 
 try {
@@ -159,7 +169,7 @@ console.log(req.user)
 
 app.get("/", (req, res) => {
     if (req.user) {
-        const postsStatement = db.prepare("SELECT * FROM posts WHERE authorid = ?")
+        const postsStatement = db.prepare("SELECT * FROM posts WHERE authorid = ? ORDER BY createdDate DESC")
         const posts = postsStatement.all(req.user.userid)
         return res.render("dashboard",{ posts, user: req.user });
     }
@@ -219,6 +229,67 @@ function mustBeLoggedIn(req,res,next){
     return res.redirect("/")
 }
 
+app.get("/edit-post/:id",mustBeLoggedIn,(req,res)=>{
+const statement = db.prepare("SELECT * FROM posts WHERE id =?")
+const post = statement.get(req.params.id)
+
+if(!post){
+    return res.redirect("/")
+}
+
+
+
+if(post.authorid !== req.user.userid){
+    return res.redirect('/')
+}
+
+
+
+res.render("edit-post",{post})
+
+
+})
+
+
+
+app.post("/edit-post/:id", mustBeLoggedIn,(req, res) => {
+  const statement = db.prepare("SELECT * FROM posts WHERE id =?");
+  const post = statement.get(req.params.id);
+
+  if (!post) {
+    return res.redirect("/");
+  }
+
+  if (post.authorid !== req.user.userid) {
+    return res.redirect("/");
+  }
+
+  const errors = sharedPostValidation(req);
+  if (errors.length) {
+    return res.render("edit-post", { post: { ...post, ...req.body } });
+    // Merges original post with user's edited values
+  }
+
+  const updateStatement = db.prepare("UPDATE posts SET title= ?, body = ? WHERE id =?");
+  updateStatement.run(req.body.title, req.body.body, req.params.id);
+
+  res.redirect(`/post/${req.params.id}`);
+});
+
+app.post("/delete-post/:id",mustBeLoggedIn,(req,res)=>{
+
+    const statement = db.prepare("SELECT * FROM posts WHERE id =?")
+    const post = statement.get(req.params.id)
+
+    if(!post){
+        return res.redirect("/")
+    }
+    const deleteStatement = db.prepare("DELETE FROM posts WHERE id = ?")
+    deleteStatement.run(req.params.id)
+    res.redirect('/')
+})
+
+
 
 app.get("/post/:id", (req,res)=>{
     const statement =db.prepare("SELECT posts.*,users.username FROM posts INNER JOIN users ON posts.authorid = users.id  WHERE posts.id = ?")
@@ -226,9 +297,12 @@ app.get("/post/:id", (req,res)=>{
     if(!post){
         return res.redirect("/")
     }
-    res.render("single-post",{ post })
+    
+    // Fix: Check if user is logged in first, then compare with userid instead of id
+    const isAuthor = req.user && post.authorid === req.user.userid
+    
+    res.render("single-post",{ post, isAuthor})
 })
-
 
 
 
